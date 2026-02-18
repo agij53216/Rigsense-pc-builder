@@ -19,7 +19,9 @@ const checkCompatibility = (components) => {
     const ram = components.ram;
     const psu = components.psu;
 
-    if (cpu && mb && cpu.socket !== mb.socket) {
+    const normalize = (str) => str ? str.toString().toLowerCase().replace(/\s+/g, '') : '';
+
+    if (cpu && mb && normalize(cpu.socket) !== normalize(mb.socket)) {
         issues.push({ type: 'error', message: `CPU socket (${cpu.socket}) does not match motherboard socket (${mb.socket})`, category: 'motherboard' });
     }
 
@@ -56,15 +58,19 @@ const checkCompatibility = (components) => {
     return { issues, estimatedWattage };
 };
 
-const calculatePerformance = (components, useCase) => {
-    const cpu = components.cpu?.performance || 0;
-    const gpu = components.gpu?.performance || 0;
-    const ram = components.ram?.performance || 0;
-    const storage = components.storage?.performance || 0;
+const calculatePerformance = (components, useCase = 'general') => {
+    // Helper to get score safely
+    const getScore = (comp) => comp?.performance_score || comp?.performance || 0;
 
-    const gaming = Math.round(gpu * 0.5 + cpu * 0.3 + ram * 0.1 + storage * 0.1);
-    const productivity = Math.round(cpu * 0.4 + ram * 0.25 + storage * 0.2 + gpu * 0.15);
-    const rendering = Math.round(cpu * 0.35 + gpu * 0.35 + ram * 0.2 + storage * 0.1);
+    const cpu = getScore(components.cpu);
+    const gpu = getScore(components.gpu);
+    const ram = getScore(components.ram);
+    const storage = getScore(components.storage);
+
+    // Weighted scores based on component importance
+    const gaming = Math.round(gpu * 0.45 + cpu * 0.35 + ram * 0.15 + storage * 0.05);
+    const productivity = Math.round(cpu * 0.40 + ram * 0.25 + storage * 0.20 + gpu * 0.15);
+    const rendering = Math.round(cpu * 0.35 + gpu * 0.35 + ram * 0.20 + storage * 0.10);
 
     let overall;
     switch (useCase) {
@@ -75,18 +81,32 @@ const calculatePerformance = (components, useCase) => {
         default: overall = Math.round((gaming + productivity + rendering) / 3);
     }
 
-    const filledSlots = Object.keys(components).length;
-    // Don't punish score for empty slots too harshly in backend, primarily score what's there but maybe scale confidence
-    const confidenceScore = Math.min(100, Math.round(overall * (filledSlots / 8)));
+    // Calculate total wattage
+    let totalWattage = 0;
+    Object.values(components).forEach(c => {
+        if (c && c.wattage) totalWattage += c.wattage;
+    });
+    // Add buffer for other components if not explicit
+    if (totalWattage > 0) totalWattage += 50;
 
-    let tier = 'Entry';
-    if (overall > 90) tier = 'Enthusiast';
-    else if (overall > 70) tier = 'High-End';
-    else if (overall > 40) tier = 'Mid-Range';
+    // FPS Estimation (Simple logic for now, can be enhanced)
+    // Using a base baseline plus modifiers from GPU/CPU score
+    const fps = {};
+    if (gpu > 0 && cpu > 0) {
+        const tier = gpu > 80 ? 'Ultra' : gpu > 60 ? 'High' : gpu > 40 ? 'Med' : 'Low';
+        fps['1080p'] = Math.round((gpu * 1.5 + cpu * 0.5) * (tier === 'Ultra' ? 1.2 : 1));
+        fps['1440p'] = Math.round(fps['1080p'] * 0.75);
+        fps['4k'] = Math.round(fps['1080p'] * 0.45);
+    }
 
-    const fps = getEstimatedFPS(cpu, gpu, overall > 85 ? '4k' : overall > 60 ? '1440p' : '1080p');
-
-    return { gaming, productivity, rendering, overall, confidenceScore, tier, fps };
+    return {
+        gaming,
+        productivity,
+        rendering,
+        overall,
+        totalWattage,
+        fps
+    };
 };
 
 const formatINR = (price) => {

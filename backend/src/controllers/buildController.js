@@ -1,16 +1,9 @@
 const Build = require('../models/Build');
 const Component = require('../models/Component');
-const { checkCompatibility, calculatePerformance, getSmartSuggestions } = require('../utils/buildCalculations');
-const { generateAlternativeBuilds, generateUpgradePath } = require('../utils/recommendations');
+const { calculatePerformance, checkCompatibility, getSmartSuggestions } = require('../utils/buildCalculations');
+const { generateUpgradePath } = require('../utils/recommendations');
 
-// Budget allocation ratios based on use case
-const BUDGET_RATIOS = {
-    gaming: { gpu: 0.40, cpu: 0.20, other: 0.40 },
-    editing: { gpu: 0.30, cpu: 0.30, ram: 0.15, other: 0.25 },
-    streaming: { cpu: 0.25, gpu: 0.35, ram: 0.15, other: 0.25 },
-    workstation: { cpu: 0.40, gpu: 0.20, ram: 0.20, other: 0.20 },
-    general: { cpu: 0.30, other: 0.70 },
-};
+
 
 // @desc    Validate build and get metrics (compatibility, performance, etc)
 // @route   POST /api/builds/validate
@@ -26,8 +19,6 @@ exports.validateBuild = async (req, res) => {
         const upgradePath = generateUpgradePath(components);
 
         // Async recommendations
-        const alternatives = await generateAlternativeBuilds(components);
-
         const totalPrice = Object.values(components).reduce((acc, c) => acc + (c ? c.price : 0), 0);
         const completionPercentage = Math.round((Object.keys(components).length / 8) * 100);
 
@@ -38,7 +29,6 @@ exports.validateBuild = async (req, res) => {
             performanceScores,
             suggestions,
             upgradePath,
-            alternatives,
             totalPrice,
             remainingBudget: (budget || 0) - totalPrice,
             completionPercentage
@@ -61,116 +51,146 @@ exports.generateBuild = async (req, res) => {
             return res.status(400).json({ message: 'Please provide a valid budget (min 500)' });
         }
 
-        const ratios = BUDGET_RATIOS[useCase] || BUDGET_RATIOS['gaming'];
-        const components = {};
-        let currentBudget = Number(budget);
 
-        // Helper to pick best component
-        const pick = async (category, maxPrice, query = {}) => {
-            // Sort by performance if preference is high
-            // performancePreference > 70 ? performance : price/performance balance
-            // For now, sticking to raw performance within budget for simplicity + compatibility
-            const sort = performancePreference > 70 ? { performance: -1 } : { price: -1, performance: -1 };
 
-            return await Component.findOne({
-                category,
-                price: { $lte: maxPrice },
-                ...query
-            }).sort(sort);
+        // Fetch all components
+        const allParts = await Component.find({}).lean();
+
+        if (allParts.length === 0) {
+            return res.status(500).json({ error: "Database is empty. Please run seed script." });
+        }
+
+        // Prepare Data for Python
+        const inputData = {
+            request: { budget, useCase },
+            database: allParts
         };
 
-        // 1. CPU
-        const cpuBudget = currentBudget * (ratios.cpu || 0.25);
-        const cpu = await pick('cpu', cpuBudget);
-        if (cpu) {
-            components.cpu = cpu;
-            currentBudget -= cpu.price;
-        }
+        const { spawn } = require('child_process');
+        const path = require('path');
 
-        // 2. Motherboard (Socket match)
-        if (components.cpu) {
-            const mbBudget = Math.min(250, currentBudget * 0.15);
-            const mb = await pick('motherboard', mbBudget, { socket: components.cpu.socket });
-            if (mb) {
-                components.motherboard = mb;
-                currentBudget -= mb.price;
+        // Determine Python Path (Check for Venv first)
+        // Adjust this path if you are not using the same venv structure
+        const isWindows = process.platform === 'win32';
+        const venvPython = isWindows
+            // Try looking for 'python' in PATH first as a general fallback if venv is missing
+            ? 'python'
+            : 'python3';
+
+        // Use a more robust way to find the script
+        const scriptPath = path.join(__dirname, '../ai/optimizer.py');
+
+
+
+
+        // Spawn Python Process
+        const pythonProcess = spawn(venvPython, [scriptPath]);
+
+        let dataString = '';
+        let errorString = '';
+
+        // Send JSON to Python (stdin)
+        pythonProcess.stdin.on('error', (err) => {
+            console.error('[AI ERROR] Failed to write to Python stdin:', err);
+        });
+        pythonProcess.stdin.write(JSON.stringify(inputData));
+        pythonProcess.stdin.end();
+
+        // Listen for Result (stdout)
+        pythonProcess.stdout.on('data', (data) => {
+            dataString += data.toString();
+        });
+
+        // Listen for Errors (stderr)
+        pythonProcess.stderr.on('data', (data) => {
+            errorString += data.toString();
+        });
+
+        // Handle Completion
+        pythonProcess.on('close', async (code) => {
+            if (code !== 0) {
+                console.error(`[AI ERROR] Python exited with code ${code}: ${errorString}`);
+                return res.status(500).json({ message: 'AI Engine Failed', details: errorString || 'Unknown Python Error' });
             }
-        }
 
-        // 3. RAM (Type match)
-        if (components.motherboard) {
-            const ramBudget = currentBudget * (ratios.ram || 0.10);
-            const ram = await pick('ram', ramBudget, { ramType: components.motherboard.ramType });
-            if (ram) {
-                components.ram = ram;
-                currentBudget -= ram.price;
+            try {
+                const result = JSON.parse(dataString);
+
+                if (result.status === 'error') {
+                    return res.status(500).json({ message: result.message });
+                }
+
+                // Pick strategy based on performancePreference slider (0-100)
+                // 0–33 → value, 34–66 → performance, 67–100 → future_proof
+                let selectedStrategy = 'performance'; // default
+                if (performancePreference <= 33) selectedStrategy = 'value';
+                else if (performancePreference >= 67) selectedStrategy = 'future_proof';
+
+                const aiBuildData = result.options[selectedStrategy] || result.options['performance'];
+
+                // Normalise parts — ensure id field is consistent
+                const components = {};
+                if (aiBuildData?.parts) {
+                    for (const [type, part] of Object.entries(aiBuildData.parts)) {
+                        if (part && part.name !== 'Unknown') {
+                            components[type] = { ...part, id: part._id || part.id || null };
+                        }
+                    }
+                }
+
+                const totalPrice = aiBuildData.totalPrice ?? 0;
+
+                // Build alternatives map from the other two strategies
+                const alternatives = {};
+                for (const [strat, data] of Object.entries(result.options)) {
+                    if (strat !== selectedStrategy) {
+                        alternatives[strat] = {
+                            build: data.parts,
+                            totalPrice: data.totalPrice,
+                            score: data.ai_score,
+                            label: data.label,
+                            description: data.description,
+                            budgetDelta: data.budgetDelta,
+                            targetBudget: data.targetBudget,
+                            difference: `${data.label}: ₹${data.totalPrice?.toLocaleString('en-IN')}`,
+                        };
+                    }
+                }
+
+                // Node.js safety-net checks
+                const { issues, estimatedWattage } = checkCompatibility(components);
+                const performanceScores = calculatePerformance(components, useCase);
+                const suggestions = getSmartSuggestions(components, budget);
+                const upgradePath = generateUpgradePath(components);
+
+                res.json({
+                    build: components,
+                    totalPrice,
+                    remainingBudget: budget - totalPrice,
+                    budgetDelta: aiBuildData.budgetDelta,
+                    targetBudget: aiBuildData.targetBudget,
+                    withinBudget: aiBuildData.withinBudget,
+                    selectedStrategy,
+                    strategyLabel: aiBuildData.label,
+                    strategyDescription: aiBuildData.description,
+                    strategySummary: result.summary,
+                    compatibilityIssues: issues,
+                    // Python bottleneck warnings (merged separately so UI can show them distinctly)
+                    aiIssues: aiBuildData.issues || [],
+                    isFullyCompatible: issues.filter(i => i.type === 'error').length === 0,
+                    estimatedWattage,
+                    performanceScores,
+                    suggestions,
+                    upgradePath,
+                    alternatives,
+                    aiReasoning: result.reasoning,
+                });
+
+            } catch (e) {
+                console.error('[AI ERROR] Failed to parse Python response:', e.message);
+                console.error('[AI STDOUT] Raw:', dataString.substring(0, 200));
+                res.status(500).json({ message: 'Invalid AI Response', details: e.message });
             }
-        }
-
-        // 4. GPU
-        const gpuBudget = currentBudget * (ratios.gpu || 0.35);
-        const gpu = await pick('gpu', gpuBudget);
-        if (gpu) {
-            components.gpu = gpu;
-            currentBudget -= gpu.price;
-        }
-
-        // 5. Storage
-        const storage = await pick('storage', 150);
-        if (storage) {
-            components.storage = storage;
-            currentBudget -= storage.price;
-        }
-
-        // 6. Case
-        const pCase = await pick('case', 120);
-        if (pCase) {
-            components.case = pCase;
-            currentBudget -= pCase.price;
-        }
-
-        // 7. PSU (Wattage check)
-        let estimatedWattage = (components.cpu?.wattage || 65) + (components.gpu?.wattage || 150) + 100;
-        const psu = await Component.findOne({
-            category: 'psu',
-            price: { $lte: 200 },
-            wattage: { $gte: estimatedWattage }
-        }).sort({ performance: -1 });
-
-        if (psu) {
-            components.psu = psu;
-            currentBudget -= psu.price;
-        }
-
-        // 8. Cooling
-        const cooling = await pick('cooling', 150);
-        if (cooling) {
-            components.cooling = cooling;
-            currentBudget -= cooling.price;
-        }
-
-        const totalPrice = Object.values(components).reduce((acc, c) => acc + (c ? c.price : 0), 0);
-
-        // --- ENHANCED RESPONSE ---
-        // Run all calculations on the generated build 
-        const { issues } = checkCompatibility(components);
-        const performanceScores = calculatePerformance(components, useCase);
-        const suggestions = getSmartSuggestions(components, budget);
-        const upgradePath = generateUpgradePath(components);
-        const alternatives = await generateAlternativeBuilds(components); // Generate alternatives for the new build
-
-        res.json({
-            build: components,
-            totalPrice,
-            remainingBudget: budget - totalPrice,
-            // Enhanced metadata
-            compatibilityIssues: issues,
-            isFullyCompatible: issues.filter(i => i.type === 'error').length === 0,
-            estimatedWattage,
-            performanceScores,
-            suggestions,
-            upgradePath,
-            alternatives
         });
 
     } catch (error) {
@@ -179,37 +199,87 @@ exports.generateBuild = async (req, res) => {
     }
 };
 
-// @desc    Get user builds
+// @desc    Get user/guest builds
 // @route   GET /api/builds
-// @access  Private
-exports.getUserBuilds = async (req, res) => {
+// @access  Public (Guest) / Private (User)
+exports.getBuilds = async (req, res) => {
     try {
-        const builds = await Build.find({ user: req.user._id }).sort({ createdAt: -1 });
+        let query = {};
+        if (req.user) {
+            query.user = req.user._id;
+        } else if (req.query.guestId) {
+            query.guestId = req.query.guestId;
+        } else {
+            return res.status(400).json({ message: 'User or Guest ID required' });
+        }
+
+        const builds = await Build.find(query).sort({ createdAt: -1 });
         res.json(builds);
     } catch (error) {
+        console.error(error);
         res.status(500).json({ message: 'Server error' });
     }
 };
 
-// @desc    Create new build
+// @desc    Create new build (User or Guest)
 // @route   POST /api/builds
-// @access  Private
-exports.createBuild = async (req, res) => {
+// @access  Public
+exports.saveBuild = async (req, res) => {
     try {
-        const { name, components, totalPrice, useCase, isPublic } = req.body;
+        const { name, components, totalPrice, useCase, isPublic, guestId } = req.body;
 
-        const build = await Build.create({
-            user: req.user._id,
+        const buildData = {
             name,
             components,
             totalPrice,
             useCase,
-            isPublic
-        });
+            isPublic: isPublic || false
+        };
 
+        if (req.user) {
+            buildData.user = req.user._id;
+        } else if (guestId) {
+            buildData.guestId = guestId;
+        } else {
+            return res.status(400).json({ message: 'User or Guest ID required to save' });
+        }
+
+        const build = await Build.create(buildData);
         res.status(201).json(build);
     } catch (error) {
-        console.error(error);
+        console.error("Save build error:", error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+// @desc    Delete build
+// @route   DELETE /api/builds/:id
+// @access  Public (if guest owns) / Private
+exports.deleteBuild = async (req, res) => {
+    try {
+        const build = await Build.findById(req.params.id);
+
+        if (!build) {
+            return res.status(404).json({ message: 'Build not found' });
+        }
+
+        // Authorization check
+        if (build.user) {
+            // Must be logged in and own it
+            if (!req.user || build.user.toString() !== req.user._id.toString()) {
+                return res.status(401).json({ message: 'Not authorized' });
+            }
+        } else if (build.guestId) {
+            const requestGuestId = req.query.guestId || req.body.guestId;
+            if (!requestGuestId || requestGuestId !== build.guestId) {
+                return res.status(401).json({ message: 'Not authorized (Guest ID mismatch)' });
+            }
+        }
+
+        await build.deleteOne();
+        res.json({ id: req.params.id });
+    } catch (error) {
+        console.error("Delete build error:", error);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -220,48 +290,29 @@ exports.createBuild = async (req, res) => {
 exports.updateBuild = async (req, res) => {
     try {
         const build = await Build.findById(req.params.id);
-
-        if (!build) {
-            return res.status(404).json({ message: 'Build not found' });
-        }
-
-        // Make sure user owns build
-        if (build.user.toString() !== req.user._id.toString()) {
+        if (!build) return res.status(404).json({ message: 'Build not found' });
+        if (!req.user || build.user?.toString() !== req.user._id.toString()) {
             return res.status(401).json({ message: 'Not authorized' });
         }
-
-        const updatedBuild = await Build.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true }
-        );
-
-        res.json(updatedBuild);
+        const updated = await Build.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        res.json(updated);
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
 
-// @desc    Delete build
-// @route   DELETE /api/builds/:id
-// @access  Private
-exports.deleteBuild = async (req, res) => {
+// @desc    Calculate build stats (stateless)
+// @route   POST /api/builds/calculate
+// @access  Public
+exports.calculateBuild = async (req, res) => {
     try {
-        const build = await Build.findById(req.params.id);
-
-        if (!build) {
-            return res.status(404).json({ message: 'Build not found' });
-        }
-
-        // Make sure user owns build
-        if (build.user.toString() !== req.user._id.toString()) {
-            return res.status(401).json({ message: 'Not authorized' });
-        }
-
-        await build.deleteOne();
-
-        res.json({ id: req.params.id });
+        const { components, useCase } = req.body;
+        if (!components) return res.status(400).json({ message: 'Components required' });
+        const { issues, estimatedWattage } = checkCompatibility(components);
+        const performanceScores = calculatePerformance(components, useCase || 'gaming');
+        const totalPrice = Object.values(components).reduce((acc, c) => acc + (c?.price || 0), 0);
+        res.json({ issues, estimatedWattage, performanceScores, totalPrice });
     } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
