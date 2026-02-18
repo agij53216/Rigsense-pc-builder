@@ -1,18 +1,10 @@
 const Component = require('../models/Component');
-const fs = require('fs');
-const path = require('path');
 
 // @desc    Get all components with filtering and sorting
 // @route   GET /api/components
 // @access  Public
 exports.getComponents = async (req, res) => {
     try {
-        const logMsg = `GET /api/components request received\n`;
-        try {
-            fs.appendFileSync(path.join(__dirname, '../../server_debug.log'), logMsg);
-        } catch (e) { }
-
-        console.log(logMsg.trim());
         const {
             category,
             tier,
@@ -57,27 +49,16 @@ exports.getComponents = async (req, res) => {
             query.name = { $regex: search, $options: 'i' };
         }
 
-        // Sorting
+        // Sorting — use performance_score as the DB field name
         let sortOption = {};
-        if (sort === 'price-asc') sortOption.price = 1;
-        else if (sort === 'price-desc') sortOption.price = -1;
-        else if (sort === 'performance') sortOption.performance = -1;
+        if (sort === 'price_asc' || sort === 'price-asc') sortOption.price = 1;
+        else if (sort === 'price_desc' || sort === 'price-desc') sortOption.price = -1;
+        else if (sort === 'performance') sortOption.performance_score = -1;
         else if (sort === 'name') sortOption.name = 1;
-        else sortOption.performance = -1; // Default to performance
+        else sortOption.performance_score = -1; // Default
 
         const components = await Component.find(query).sort(sortOption);
-        const logMsg2 = `Query: ${JSON.stringify(query)}\nFound: ${components.length} components\n`;
-        try {
-            fs.appendFileSync(path.join(__dirname, '../../server_debug.log'), logMsg2);
-        } catch (e) { }
-
-        console.error(logMsg2.trim());
-
-        if (components.length === 0) {
-            console.error('DEBUG: No components found, checking count...');
-            const count = await Component.countDocuments();
-            console.error(`DEBUG: Total documents in collection: ${count}`);
-        }
+        console.log(`GET /api/components → Query: ${JSON.stringify(query)} → Found: ${components.length}`);
 
         res.json(components);
     } catch (error) {

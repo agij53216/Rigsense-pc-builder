@@ -24,43 +24,32 @@ const componentSchema = new mongoose.Schema({
         enum: ['budget', 'mid', 'premium'],
         required: false
     },
+    // Flexible specs object (from new data structure)
     specs: {
-        type: Object, // Changed from Map to Object to be more flexible with JSON
+        type: Object,
         default: {}
     },
-    // Single performance score 0-100 to match frontend
+    // Performance score (0-100)
+    performance_score: {
+        type: Number,
+        default: 0
+    },
+    // Alias for compatibility if needed, or can use virtual
     performance: {
         type: Number,
         default: 0
     },
-    imageUrl: {
-        type: String,
-        required: false
-    },
-    manufacturer: {
-        type: String,
-        required: false
-    },
-    inStock: {
-        type: Boolean,
-        default: true
-    },
-    discount: {
+    wattage: {
         type: Number,
         default: 0
     },
-    features: [{
-        type: String
-    }],
-    isCustom: {
-        type: Boolean,
-        default: false
-    },
-    // Compatibility fields
-    socket: { type: String, required: false },
-    ramType: { type: [String], required: false }, // Array to support multiple types/compatibility
-    wattage: { type: Number, required: false },
-    formFactor: { type: String, required: false },
+    socket: { type: String },
+    ramType: { type: String },
+    formFactor: { type: String },
+
+    // New fields
+    highlights: [{ type: String }],
+    features: [{ type: String }],
 
     // Detailed Specs (Data from CSV)
     clockSpeed: String,

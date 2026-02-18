@@ -4,7 +4,11 @@ const buildSchema = new mongoose.Schema({
     user: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: false
+    },
+    guestId: {
+        type: String,
+        index: true
     },
     name: {
         type: String,
@@ -12,14 +16,8 @@ const buildSchema = new mongoose.Schema({
         trim: true
     },
     components: {
-        cpu: { type: mongoose.Schema.Types.ObjectId, ref: 'Component' },
-        gpu: { type: mongoose.Schema.Types.ObjectId, ref: 'Component' },
-        motherboard: { type: mongoose.Schema.Types.ObjectId, ref: 'Component' },
-        ram: { type: mongoose.Schema.Types.ObjectId, ref: 'Component' },
-        storage: { type: mongoose.Schema.Types.ObjectId, ref: 'Component' },
-        psu: { type: mongoose.Schema.Types.ObjectId, ref: 'Component' },
-        case: { type: mongoose.Schema.Types.ObjectId, ref: 'Component' },
-        cooling: { type: mongoose.Schema.Types.ObjectId, ref: 'Component' }
+        type: mongoose.Schema.Types.Mixed, // Allow full component objects/snapshots
+        required: true
     },
     totalPrice: {
         type: Number,
