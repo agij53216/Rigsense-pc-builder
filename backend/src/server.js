@@ -32,6 +32,7 @@ connectDB();
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/builds', require('./routes/builds'));
 app.use('/api/components', require('./routes/components'));
+app.use('/api/presets', require('./routes/presets')); // New route
 
 // Health check
 app.get('/health', (req, res) => {
