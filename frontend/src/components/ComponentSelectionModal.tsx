@@ -2,11 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Search, ChevronDown, Filter, DollarSign, Package, CheckCircle2, Users, Loader2 } from 'lucide-react';
+import { X, Search, ChevronDown, Filter, DollarSign, Package, CheckCircle2, Users, Loader2, Trash2, Sparkles } from 'lucide-react';
 import { type PCComponent, type ComponentCategory, categoryLabels } from '@/data/mockComponents';
 import { type BuildState } from '@/store/buildContext';
-import ProductCard from './ProductCard';
-import { cn } from '@/lib/utils';
+import { cn, formatINR } from '@/lib/utils';
 import { fetchComponents, fetchBrands, type ComponentFilter } from '@/lib/api';
 
 interface ComponentSelectionModalProps {
@@ -122,8 +121,13 @@ export default function ComponentSelectionModal({
         onClose();
     };
 
-    const handleDelete = (componentId: string) => {
-        console.log('Delete component:', componentId);
+    const handleDelete = (component: PCComponent, e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (window.confirm(`Are you sure you want to delete "${component.name}"?`)) {
+            // In a real app, this would call an API/store action
+            console.log('Delete component:', component.id);
+            // After delete logic (which isn't fully implemented in the original file either), reload or update state
+        }
     };
 
     if (!isOpen) return null;
@@ -326,15 +330,89 @@ export default function ComponentSelectionModal({
                                 </div>
                             ) : components.length > 0 ? (
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                                    {components.map(component => (
-                                        <ProductCard
-                                            key={component.id}
-                                            component={component}
-                                            isSelected={component.id === selectedComponentId}
-                                            onSelect={() => handleSelect(component)}
-                                            onDelete={component.isCustom ? () => handleDelete(component.id) : undefined}
-                                        />
-                                    ))}
+                                    {components.map(component => {
+                                        const isSelected = component.id === selectedComponentId;
+                                        return (
+                                            <motion.div
+                                                key={component.id}
+                                                initial={{ opacity: 0, y: 20 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                className={cn(
+                                                    'group relative glass rounded-xl p-4 transition-all duration-300 hover:scale-[1.02] cursor-pointer',
+                                                    isSelected
+                                                        ? 'bg-[#ff9500]/10 border-[#ff9500]/30 shadow-[0_0_20px_rgba(255,149,0,0.2)]'
+                                                        : 'hover:bg-white/[0.06] border-transparent'
+                                                )}
+                                                onClick={() => handleSelect(component)}
+                                            >
+                                                {/* Delete Button */}
+                                                {component.isCustom && (
+                                                    <button
+                                                        onClick={(e) => handleDelete(component, e)}
+                                                        className="absolute top-3 right-3 z-10 p-1.5 rounded-lg bg-[#ff006e]/10 text-[#ff006e] opacity-0 group-hover:opacity-100 hover:bg-[#ff006e]/20 transition-all"
+                                                        title="Delete build"
+                                                    >
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </button>
+                                                )}
+
+                                                {/* Image */}
+                                                <div className="relative aspect-square rounded-lg bg-white/5 mb-3 overflow-hidden border border-white/10">
+                                                    {component.imageUrl ? (
+                                                        <img
+                                                            src={component.imageUrl}
+                                                            alt={component.name}
+                                                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                                                            onError={(e) => (e.currentTarget.style.display = 'none')}
+                                                        />
+                                                    ) : (
+                                                        <div className="w-full h-full flex items-center justify-center text-[#6b7280]">
+                                                            <Sparkles className="h-12 w-12" />
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Content */}
+                                                <div className="space-y-2">
+                                                    {/* Tier Badge */}
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={cn(
+                                                            "px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider",
+                                                            component.tier === 'budget' ? 'text-[#00ff9f] bg-[#00ff9f]/10 border border-[#00ff9f]/30' :
+                                                                component.tier === 'mid' ? 'text-[#ff9500] bg-[#ff9500]/10 border border-[#ff9500]/30' :
+                                                                    'text-[#a855f7] bg-[#a855f7]/10 border border-[#a855f7]/30'
+                                                        )}>
+                                                            {component.tier}
+                                                        </span>
+                                                    </div>
+
+                                                    {/* Name */}
+                                                    <h3 className="text-sm font-semibold text-white line-clamp-2 min-h-[2.5rem]">
+                                                        {component.name}
+                                                    </h3>
+
+                                                    {/* Price */}
+                                                    <div className="text-lg font-bold text-white" style={{ fontFamily: 'Press Start 2P, sans-serif' }}>
+                                                        {formatINR(component.price)}
+                                                    </div>
+
+                                                    {/* Performance */}
+                                                    <div className="space-y-1">
+                                                        <div className="flex justify-between text-[10px]">
+                                                            <span className="text-[#6b7280]">Performance</span>
+                                                            <span className="text-[#ff9500] font-semibold">{component.performance}</span>
+                                                        </div>
+                                                        <div className="h-1.5 rounded-full bg-white/10 overflow-hidden border border-white/5">
+                                                            <div
+                                                                className="h-full rounded-full bg-[#ff9500]"
+                                                                style={{ width: `${component.performance}%` }}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </motion.div>
+                                        );
+                                    })}
                                 </div>
                             ) : (
                                 <div className="flex flex-col items-center justify-center h-full text-center">
