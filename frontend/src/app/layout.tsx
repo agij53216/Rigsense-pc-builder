@@ -1,13 +1,17 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import ErrorReporter from "@/components/ErrorReporter";
 import ClientLayout from "@/components/ClientLayout";
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#050810",
+};
+
 export const metadata: Metadata = {
   title: "RigSense Engine - AI-Powered PC Building Platform",
   description: "Build your dream PC with AI-powered intelligence. Real-time compatibility, budget optimization, and performance analytics.",
-  viewport: "width=device-width, initial-scale=1",
-  themeColor: "#050810",
 };
 
 export default function RootLayout({

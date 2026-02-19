@@ -8,7 +8,8 @@ import {
   ArrowRight, ArrowLeft, Zap, DollarSign,
   Target, TrendingUp, ChevronRight,
 } from 'lucide-react';
-import { useBuild, formatINR } from '@/store/buildContext';
+import { useBuild } from '@/store/buildContext';
+import { formatINR } from '@/lib/utils';
 
 const steps = ['Budget', 'Use Case', 'Performance', 'Review'];
 

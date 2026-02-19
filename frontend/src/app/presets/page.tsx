@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
@@ -8,15 +8,16 @@ import {
   Filter, Cpu, MonitorSpeaker, CircuitBoard, MemoryStick,
   HardDrive, Plug, Box, Fan, Zap, Check, Trash2,
 } from 'lucide-react';
-import { useBuild, formatINR, buildStateToPreset } from '@/store/buildContext';
+import { formatINR } from '@/lib/utils';
+import { useBuild, buildStateToPreset } from '@/store/buildContext';
+import { fetchPresets } from '@/lib/api';
 import {
-  presetBuilds, allComponents,
-  type PresetBuild, type ComponentCategory, type UseCase, type ComponentTier,
-  categoryLabels,
+  type PresetBuild, type PCComponent, type ComponentCategory, type UseCase, type ComponentTier,
+  categoryLabels, categoryOrder,
 } from '@/data/mockComponents';
 import { cn } from '@/lib/utils';
 
-import { TIER_COLORS } from "@/lib/constants";;
+import { TIER_COLORS } from "@/lib/constants";
 
 const useCaseIcons: Record<string, React.ElementType> = {
   gaming: Gamepad2,
@@ -24,6 +25,7 @@ const useCaseIcons: Record<string, React.ElementType> = {
   streaming: Radio,
   workstation: Briefcase,
   general: Monitor,
+  all: Monitor
 };
 
 const categoryIcons: Record<ComponentCategory, React.ElementType> = {
@@ -40,10 +42,15 @@ export default function PresetsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [buildToDelete, setBuildToDelete] = useState<PresetBuild | null>(null);
+  const [backendPresets, setBackendPresets] = useState<PresetBuild[]>([]);
+
+  useEffect(() => {
+    fetchPresets().then(setBackendPresets).catch(console.error);
+  }, []);
 
   // Convert saved builds to preset format and merge with default presets
   const customPresets = savedBuilds.map(buildStateToPreset);
-  const allPresets = [...customPresets, ...presetBuilds];
+  const allPresets = [...customPresets, ...backendPresets];
 
   const filtered = allPresets.filter((p) => {
     if (tierFilter !== 'all' && p.tier !== tierFilter) return false;
@@ -53,8 +60,8 @@ export default function PresetsPage() {
   });
 
   const handleLoad = (preset: PresetBuild) => {
-    loadPreset(preset.components);
-    setBudget(preset.price + 200);
+    loadPreset(preset.components as any);
+    setBudget((preset.price || preset.totalPrice || 0) + 200);
     router.push('/build');
   };
 
@@ -193,7 +200,7 @@ export default function PresetsPage() {
                       </span>
                     </div>
                     <span className="text-xl font-bold text-white" style={{ fontFamily: 'Press Start 2P, sans-serif' }}>
-                      {formatINR(preset.price)}
+                      {formatINR(preset.price || preset.totalPrice || 0)}
                     </span>
                   </div>
 
@@ -229,8 +236,14 @@ export default function PresetsPage() {
                       exit={{ opacity: 0, height: 0 }}
                       className="space-y-1.5 mb-4"
                     >
-                      {(Object.entries(preset.components) as [ComponentCategory, string][]).map(([cat, compId]) => {
-                        const comp = allComponents[cat]?.find(c => c.id === compId);
+                      {(Object.entries(preset.components) as [ComponentCategory, string | PCComponent][]).map(([cat, compOrId]) => {
+                        let comp: PCComponent | undefined;
+                        if (typeof compOrId === 'string') {
+                          comp = { name: 'Legacy Component', price: 0, performance: 0 } as PCComponent;
+                        } else {
+                          comp = compOrId as PCComponent;
+                        }
+
                         if (!comp) return null;
                         const CatIcon = categoryIcons[cat];
                         return (
