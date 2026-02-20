@@ -1,47 +1,23 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
-  GitCompare, Plus, X, BarChart3, Zap, DollarSign, Shield, Check, AlertTriangle,
+  GitCompare, Plus, X, BarChart3, Zap, DollarSign, Shield,
   Cpu, MonitorSpeaker, CircuitBoard, MemoryStick, HardDrive, Plug, Box, Fan,
-  ChevronDown, ArrowRight,
 } from 'lucide-react';
 import {
-  presetBuilds, allComponents,
-  type PresetBuild, type ComponentCategory,
-  categoryLabels, categoryOrder,
+  type PresetBuild, type ComponentCategory, categoryLabels, categoryOrder,
 } from '@/data/mockComponents';
-import { cn } from '@/lib/utils';
-import { formatINR, buildStateToPreset, useBuild } from '@/store/buildContext';
+import { cn, formatINR } from '@/lib/utils';
+import { buildStateToPreset, useBuild } from '@/store/buildContext';
+import { fetchPresets, calculateBuild } from '@/lib/api';
+import { TIER_COLORS } from "@/lib/constants";
 
 const categoryIcons: Record<ComponentCategory, React.ElementType> = {
   cpu: Cpu, gpu: MonitorSpeaker, motherboard: CircuitBoard, ram: MemoryStick,
   storage: HardDrive, psu: Plug, case: Box, cooling: Fan,
 };
-
-import { TIER_COLORS } from "@/lib/constants";;
-
-function getPresetPerformance(preset: PresetBuild) {
-  let gaming = 0, prod = 0, total = 0, wattage = 100, count = 0;
-  for (const [cat, compId] of Object.entries(preset.components)) {
-    const comp = allComponents[cat as ComponentCategory]?.find(c => c.id === compId);
-    if (!comp) continue;
-    total += comp.price;
-    count++;
-    if (cat === 'gpu') { gaming += comp.performance * 0.5; prod += comp.performance * 0.15; wattage += comp.wattage || 150; }
-    else if (cat === 'cpu') { gaming += comp.performance * 0.3; prod += comp.performance * 0.4; wattage += comp.wattage || 65; }
-    else if (cat === 'ram') { gaming += comp.performance * 0.1; prod += comp.performance * 0.25; }
-    else if (cat === 'storage') { gaming += comp.performance * 0.1; prod += comp.performance * 0.2; }
-  }
-  return {
-    gaming: Math.round(gaming),
-    productivity: Math.round(prod),
-    price: total,
-    wattage,
-    valueScore: total > 0 ? Math.round(((gaming + prod) / 2) / (total / 1000)) : 0,
-  };
-}
 
 function MetricBar({ label, value, maxValue, color }: { label: string; value: number; maxValue: number; color: string }) {
   const pct = maxValue > 0 ? (value / maxValue) * 100 : 0;
@@ -67,11 +43,52 @@ function MetricBar({ label, value, maxValue, color }: { label: string; value: nu
 export default function ComparePage() {
   const [slots, setSlots] = useState<(PresetBuild | null)[]>([null, null]);
   const [openSlot, setOpenSlot] = useState<number | null>(null);
+  const [backendPresets, setBackendPresets] = useState<PresetBuild[]>([]);
+  // Store calculated stats for each slot
+  const [slotStats, setSlotStats] = useState<any[]>([]);
+
   const { savedBuilds } = useBuild();
 
-  // Convert saved builds to preset format and merge with default presets
+  useEffect(() => {
+    // Load presets from backend
+    fetchPresets().then(setBackendPresets).catch(console.error);
+  }, []);
+
+  // Recalculate stats when slots change
+  useEffect(() => {
+    const calculateAll = async () => {
+      const results = await Promise.all(slots.map(async (slot) => {
+        if (!slot) return null;
+        try {
+          const data = await calculateBuild(slot.components, slot.useCase);
+          // Backend returns: { performanceScores, issues, estimatedWattage, totalPrice }
+          const ps = data.performanceScores || {};
+          const gaming = ps.gaming ?? 0;
+          const productivity = ps.productivity ?? 0;
+          const price = slot.price || slot.totalPrice || data.totalPrice || 0;
+          const valueScore = price > 0
+            ? Math.round(((gaming + productivity) / 2) / (price / 1000))
+            : 0;
+          return {
+            gaming,
+            productivity,
+            valueScore,
+            price,
+            wattage: data.estimatedWattage ?? 0,
+          };
+        } catch (e) {
+          console.error('Calc failed', e);
+          return null;
+        }
+      }));
+      setSlotStats(results);
+    };
+    calculateAll();
+  }, [slots]);
+
+  // Convert saved builds to preset format
   const customPresets = savedBuilds.map(buildStateToPreset);
-  const allPresets = [...customPresets, ...presetBuilds];
+  const allPresets = [...customPresets, ...backendPresets];
 
   const addSlot = () => {
     if (slots.length < 3) setSlots([...slots, null]);
@@ -90,7 +107,8 @@ export default function ComparePage() {
     setOpenSlot(null);
   };
 
-  const stats = useMemo(() => slots.map(s => s ? getPresetPerformance(s) : null), [slots]);
+  // Use calculated stats
+  const stats = slotStats;
   const maxGaming = Math.max(...stats.map(s => s?.gaming || 0), 1);
   const maxProd = Math.max(...stats.map(s => s?.productivity || 0), 1);
   const maxValue = Math.max(...stats.map(s => s?.valueScore || 0), 1);
@@ -141,7 +159,7 @@ export default function ComparePage() {
                   <h3 className="text-lg font-bold text-white">{slot.name}</h3>
                   <p className="text-xs text-[#6b7280] mb-2">{slot.tagline}</p>
                   <div className="text-xl font-bold" style={{ fontFamily: 'Press Start 2P, sans-serif', color: slotColors[idx] }}>
-                    {formatINR(slot.price)}
+                    {formatINR(slot.price || slot.totalPrice || 0)}
                   </div>
                   <button
                     onClick={() => setOpenSlot(openSlot === idx ? null : idx)}
@@ -192,7 +210,7 @@ export default function ComparePage() {
                       </div>
                       <div className="text-xs text-[#6b7280]">{p.tagline}</div>
                     </div>
-                    <span className="text-sm font-mono font-semibold text-[#ff9500]">{formatINR(p.price)}</span>
+                    <span className="text-sm font-mono font-semibold text-[#ff9500]">{formatINR(p.price || p.totalPrice || 0)}</span>
                   </button>
                 ))}
               </motion.div>
@@ -263,15 +281,18 @@ export default function ComparePage() {
                     <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${slots.length}, 1fr)` }}>
                       {slots.map((slot, idx) => {
                         if (!slot) return <div key={idx} className="text-xs text-[#6b7280]">—</div>;
-                        const compId = slot.components[cat];
-                        const comp = compId ? allComponents[cat]?.find(c => c.id === compId) : null;
+                        const compOrId = slot.components[cat];
+                        const comp = typeof compOrId === 'string'
+                          ? { name: 'Legacy Component', price: 0, performance: 0, specs: {} } as any // Fallback
+                          : compOrId as any;
+
                         if (!comp) return <div key={idx} className="text-xs text-[#6b7280]">—</div>;
                         return (
                           <div key={idx} className="text-xs">
                             <div className="text-white font-medium truncate">{comp.name}</div>
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="font-mono" style={{ color: slotColors[idx] }}>{formatINR(comp.price)}</span>
-                              <span className="text-[#6b7280]">Perf: {comp.performance}</span>
+                              <span className="text-[#6b7280]">Perf: {comp.performance ?? comp.performance_score ?? '—'}</span>
                             </div>
                           </div>
                         );
